@@ -105,6 +105,25 @@ function normalizePaletteSeed(url) {
   return url.toLowerCase() === "about:blank" ? "" : url;
 }
 
+function nextFolderName(baseName, siblingNodes) {
+  const siblings = Array.isArray(siblingNodes) ? siblingNodes : [];
+  const siblingNames = new Set(
+    siblings
+      .filter((node) => node?.type === "folder" && typeof node.name === "string")
+      .map((node) => node.name.trim().toLowerCase())
+  );
+
+  if (!siblingNames.has(baseName.toLowerCase())) {
+    return baseName;
+  }
+
+  let index = 2;
+  while (siblingNames.has(`${baseName} ${index}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${baseName} ${index}`;
+}
+
 function isEditableTarget(target) {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -280,12 +299,14 @@ export default function Sidebar() {
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [findStats, setFindStats] = useState({ matches: 0, activeMatchOrdinal: 0 });
+  const [editDialog, setEditDialog] = useState(null);
   const [activeFolderId, setActiveFolderId] = useState(bookmarks.rootId);
   const [draggingBookmarkId, setDraggingBookmarkId] = useState(null);
   const [dropHint, setDropHint] = useState({ id: null, mode: null });
 
   const paletteInputRef = useRef(null);
   const findInputRef = useRef(null);
+  const editInputRef = useRef(null);
   const importInputRef = useRef(null);
   const boundsRafRef = useRef(0);
   const lastBoundsRef = useRef({ x: -1, y: -1, width: -1, height: -1 });
@@ -343,7 +364,7 @@ export default function Sidebar() {
     return ranked.slice(0, 10);
   }, [allBookmarkItems, paletteInput]);
   const parentFolder = currentFolder?.parentId ? bookmarks.nodes[currentFolder.parentId] : null;
-  const anyOverlayOpen = paletteOpen || historyOpen || downloadsOpen;
+  const anyOverlayOpen = paletteOpen || historyOpen || downloadsOpen || Boolean(editDialog);
 
   useEffect(() => {
     setAddressInput(activeTab?.url ?? "");
@@ -386,6 +407,17 @@ export default function Sidebar() {
     }, 0);
     return () => clearTimeout(id);
   }, [findOpen]);
+
+  useEffect(() => {
+    if (!editDialog) {
+      return;
+    }
+    const id = setTimeout(() => {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    }, 0);
+    return () => clearTimeout(id);
+  }, [editDialog]);
 
   useEffect(() => {
     if (!findOpen) {
@@ -812,11 +844,9 @@ export default function Sidebar() {
   );
 
   const createFolder = () => {
-    const name = window.prompt("Folder name", "New Folder");
-    if (!name || !name.trim()) {
-      return;
-    }
-    dispatch(addBookmarkFolder({ parentId: currentFolder.id, name: name.trim() }));
+    const parentId = currentFolder?.id || bookmarks.rootId;
+    const name = nextFolderName("New Folder", bookmarkChildren);
+    dispatch(addBookmarkFolder({ parentId, name }));
   };
 
   const createBookmark = () => {
@@ -855,26 +885,54 @@ export default function Sidebar() {
       }
 
       if (node.type === "folder") {
-        const name = window.prompt("Rename folder", node.name);
-        if (!name || !name.trim()) {
-          return;
-        }
-        dispatch(editBookmarkNode({ id: node.id, name: name.trim() }));
+        setEditDialog({
+          id: node.id,
+          type: "folder",
+          name: node.name || "",
+        });
         return;
       }
 
-      const title = window.prompt("Edit title", node.title);
-      if (!title || !title.trim()) {
-        return;
-      }
-      const url = window.prompt("Edit URL", node.url);
-      if (!url || !url.trim()) {
-        return;
-      }
-      dispatch(editBookmarkNode({ id: node.id, title: title.trim(), url: url.trim() }));
+      setEditDialog({
+        id: node.id,
+        type: "bookmark",
+        title: node.title || "",
+        url: node.url || "",
+      });
     },
     [dispatch]
   );
+
+  const submitEditDialog = (event) => {
+    event.preventDefault();
+    if (!editDialog?.id) {
+      return;
+    }
+
+    if (editDialog.type === "folder") {
+      const name = (editDialog.name ?? "").trim();
+      if (!name) {
+        toast.error("Folder name is required");
+        return;
+      }
+      dispatch(editBookmarkNode({ id: editDialog.id, name }));
+      setEditDialog(null);
+      return;
+    }
+
+    const title = (editDialog.title ?? "").trim();
+    const url = (editDialog.url ?? "").trim();
+    if (!title) {
+      toast.error("Bookmark title is required");
+      return;
+    }
+    if (!url) {
+      toast.error("Bookmark URL is required");
+      return;
+    }
+    dispatch(editBookmarkNode({ id: editDialog.id, title, url }));
+    setEditDialog(null);
+  };
 
   const deleteNode = useCallback(
     (node) => {
@@ -1375,6 +1433,64 @@ export default function Sidebar() {
           onClose={() => setDownloadsOpen(false)}
         />
       </Suspense>
+
+      {editDialog && (
+        <div
+          className="no-drag fixed inset-0 z-50 flex items-start justify-center bg-slate-950/35 backdrop-blur-sm pt-16"
+          onMouseDown={() => setEditDialog(null)}
+        >
+          <form
+            className="w-[min(520px,calc(100vw-48px))] rounded border border-white/20 bg-slate-900/65 p-2.5 shadow-2xl backdrop-blur-2xl"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={submitEditDialog}
+          >
+            <div className="mb-2 text-xs uppercase tracking-[0.2em] text-white/65">
+              {editDialog.type === "folder" ? "Rename Folder" : "Edit Bookmark"}
+            </div>
+            {editDialog.type === "folder" ? (
+              <input
+                ref={editInputRef}
+                value={editDialog.name ?? ""}
+                onChange={(e) => setEditDialog((prev) => ({ ...prev, name: e.target.value }))}
+                className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                placeholder="Folder name"
+              />
+            ) : (
+              <div className="space-y-2">
+                <input
+                  ref={editInputRef}
+                  value={editDialog.title ?? ""}
+                  onChange={(e) => setEditDialog((prev) => ({ ...prev, title: e.target.value }))}
+                  className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                  placeholder="Bookmark title"
+                />
+                <input
+                  value={editDialog.url ?? ""}
+                  onChange={(e) => setEditDialog((prev) => ({ ...prev, url: e.target.value }))}
+                  className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                  placeholder="Bookmark URL"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10"
+                onClick={() => setEditDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded border border-cyan-300/40 bg-cyan-300/15 px-2 py-1 text-xs text-cyan-50 transition hover:bg-cyan-300/25"
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </aside>
   );
 }
