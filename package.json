@@ -1,0 +1,68 @@
+{
+  "name": "aria-browser",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:5173 && powershell -NoProfile -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; $env:VITE_DEV_SERVER_URL='http://localhost:5173'; electron .\"",
+    "start": "powershell -NoProfile -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; electron .\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.6.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hot-toast": "^2.5.2",
+    "react-redux": "^9.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.0",
+    "cross-env": "^10.0.0",
+    "electron": "^36.0.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "vite": "^7.1.0",
+    "wait-on": "^8.0.3"
+  },
+  "optionalDependencies": {
+    "electron-mica-widget": "npm:mica-electron@^1.5.16"
+  },
+  "build": {
+    "appId": "com.aria.browser",
+    "productName": "Aria Browser",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "package.json",
+      "assets/icons/**/*"
+    ],
+    "icon": "assets/icons/app",
+    "win": {
+      "icon": "assets/icons/app.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
