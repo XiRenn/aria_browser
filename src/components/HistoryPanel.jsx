@@ -16,21 +16,21 @@ export default function HistoryPanel({ open, entries, onOpenEntry, onClear, onCl
   const list = Array.isArray(entries) ? entries : [];
 
   return (
-    <div className="no-drag fixed inset-0 z-50 flex items-start justify-center bg-slate-950/35 backdrop-blur-sm pt-16" onMouseDown={onClose}>
+    <div className="no-drag pointer-events-auto fixed inset-0 z-50 flex items-start justify-center bg-slate-950/35 backdrop-blur-sm pt-16" onMouseDown={onClose}>
       <div
-        className="w-[min(860px,calc(100vw-48px))] rounded border border-white/20 bg-slate-900/65 p-2.5 shadow-2xl backdrop-blur-2xl"
+        className="drag-region w-[min(860px,calc(100vw-48px))] rounded-none border border-white/20 bg-slate-900/65 p-2.5 shadow-2xl backdrop-blur-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="mb-2 flex items-center justify-between border-b border-white/15 pb-2">
-          <div className="flex items-center gap-2 text-sm text-white/90">
+        <div className="no-drag-children mb-2 flex items-center justify-between border-b border-white/15 pb-2">
+          <div className="no-drag flex items-center gap-2 text-sm text-white/90">
             <HistoryIcon className="h-4 w-4" />
             <span>History</span>
           </div>
-          <div className="flex items-center gap-2">
-            <button type="button" className="rounded border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10" onClick={onClear}>
+          <div className="no-drag flex items-center gap-2">
+            <button type="button" className="rounded-none border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10" onClick={onClear}>
               Clear
             </button>
-            <button type="button" className="rounded border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10" onClick={onClose}>
+            <button type="button" className="rounded-none border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10" onClick={onClose}>
               Close
             </button>
           </div>
@@ -38,13 +38,13 @@ export default function HistoryPanel({ open, entries, onOpenEntry, onClear, onCl
 
         <div className="max-h-[62vh] overflow-y-auto space-y-1">
           {list.length === 0 && (
-            <div className="rounded border border-white/10 bg-white/5 p-3 text-xs text-white/70">No history yet.</div>
+            <div className="rounded-none border border-white/10 bg-white/5 p-3 text-xs text-white/70">No history yet.</div>
           )}
           {list.map((entry) => (
             <button
               key={entry.id}
               type="button"
-              className="w-full rounded border border-white/10 bg-white/5 p-2 text-left transition hover:bg-white/10"
+              className="w-full rounded-none border border-white/10 bg-white/5 p-2 text-left transition hover:bg-white/10"
               onClick={() => onOpenEntry?.(entry)}
               title={entry.url}
             >

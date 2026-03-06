@@ -12,8 +12,8 @@ try {
 
 const isMac = process.platform === "darwin";
 const isWin = process.platform === "win32";
-const WINDOW_RADIUS_MD = 2;
-const WEBVIEW_RADIUS_MD = 8;
+const WINDOW_RADIUS_MD = 0;
+const WEBVIEW_RADIUS_MD = 0;
 const WINDOW_MIN_WIDTH = 320;
 const WINDOW_MIN_HEIGHT = 240;
 const INACTIVE_TAB_DISCARD_DELAY_MS = 900000;
@@ -21,9 +21,9 @@ const MEDIA_TAB_RECHECK_DELAY_MS = 30000;
 
 const UI_PADDING = { top: 60, left: 64, right: 8, bottom: 8 };
 const WINDOW_SIZE_PRESETS = {
-  1: { width: 1100, height: 750 },
-  2: { width: 950, height: 650 },
-  3: { width: 700, height: 450 },
+  1: { width: 1250, height: 700 },
+  2: { width: 1000, height: 550 },
+  3: { width: 750, height: 470 },
 };
 
 const contexts = new Map();
@@ -181,7 +181,7 @@ function applyWindowRoundedShape(win) {
     return;
   }
 
-  if (win.isMaximized() || win.isFullScreen()) {
+  if (win.isFullScreen()) {
     win.setShape([]);
     return;
   }
@@ -237,12 +237,116 @@ function applyWindowSizePreset(ctx, preset) {
   win.setBounds({ x, y, width, height });
 }
 
+function isDevToolsShortcut(input) {
+  if (!input || input.type !== "keyDown") {
+    return false;
+  }
+
+  const key = typeof input.key === "string" ? input.key.toLowerCase() : "";
+  const isF12 = key === "f12";
+  const isCtrlShiftI = Boolean(input.control) && Boolean(input.shift) && !input.alt && !input.meta && key === "i";
+  return isF12 || isCtrlShiftI;
+}
+
+function toggleDevTools(webContents) {
+  if (!webContents || webContents.isDestroyed()) {
+    return;
+  }
+
+  if (webContents.isDevToolsOpened()) {
+    webContents.closeDevTools();
+    return;
+  }
+
+  webContents.openDevTools({ mode: "detach", activate: true });
+}
+
 function bindWindowSizeShortcuts(ctx, webContents) {
   if (!webContents || webContents.isDestroyed()) {
     return;
   }
 
   webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") {
+      return;
+    }
+
+    const primaryMod = isMac ? input.meta : input.control;
+    const shift = input.shift;
+
+    // Command Palette (Ctrl+T, Ctrl+L)
+    if (primaryMod && !shift && (input.key.toLowerCase() === "t" || input.key.toLowerCase() === "l")) {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:palette", { mode: input.key.toLowerCase() === "t" ? "new-tab" : "navigate" });
+      return;
+    }
+
+    // Close Tab (Ctrl+W)
+    if (primaryMod && !shift && input.key.toLowerCase() === "w") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:close-tab");
+      return;
+    }
+
+    // History (Ctrl+H)
+    if (primaryMod && !shift && input.key.toLowerCase() === "h") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:history");
+      return;
+    }
+
+    // Downloads (Ctrl+J)
+    if (primaryMod && !shift && input.key.toLowerCase() === "j") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:downloads");
+      return;
+    }
+
+    // Find (Ctrl+F)
+    if (primaryMod && input.key.toLowerCase() === "f") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:find", { reverse: shift });
+      return;
+    }
+
+    // Toggle Sidebar/Zen Mode (Ctrl+B)
+    if (primaryMod && !shift && input.key.toLowerCase() === "b") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:toggle-sidebar");
+      return;
+    }
+
+    // Reopen closed tab (Ctrl+Shift+T)
+    if (primaryMod && shift && input.key.toLowerCase() === "t") {
+      event.preventDefault();
+      sendToRenderer(ctx, "shortcut:reopen-tab");
+      return;
+    }
+
+    // New Window (Ctrl+N)
+    if (primaryMod && !shift && input.key.toLowerCase() === "n") {
+      event.preventDefault();
+      openUrlInNewWindow(ctx, "about:blank");
+      return;
+    }
+
+    if (isDevToolsShortcut(input)) {
+      event.preventDefault();
+      toggleDevTools(webContents);
+      return;
+    }
+
+    if (input.key === "Escape" && ctx?.isHtmlFullscreen) {
+      const active = getActiveTabEntry(ctx);
+      if (active?.view?.webContents && !active.view.webContents.isDestroyed()) {
+        active.view.webContents.executeJavaScript("if (document.exitFullscreen) { document.exitFullscreen(); } else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }", true)
+          .catch(() => {});
+      }
+      setTimeout(() => {
+        void reconcileActiveHtmlFullscreen(ctx);
+      }, 50);
+    }
+
     const preset = getWindowSizePresetFromInput(input);
     if (!preset) {
       return;
@@ -293,7 +397,11 @@ function sendToRenderer(ctx, channel, payload) {
   if (!win || win.isDestroyed()) {
     return;
   }
-  win.webContents.send(channel, payload);
+  try {
+    win.webContents.send(channel, payload);
+  } catch {
+    // Ignore transient send races during window/tab teardown.
+  }
 }
 
 function broadcastToRenderers(channel, payload) {
@@ -428,6 +536,7 @@ function createTabView(ctx, tabId) {
     view,
     currentFaviconUrl: "",
     pendingUrl: "",
+    isHtmlFullscreen: false,
   };
 
   ctx.tabViews.set(tabId, entry);
@@ -444,8 +553,43 @@ function createTabView(ctx, tabId) {
     entry.currentFaviconUrl = "";
     emitTabWebState(ctx, tabId);
   });
-  view.webContents.on("did-navigate-in-page", () => emitTabWebState(ctx, tabId));
-  view.webContents.on("did-finish-load", () => emitTabWebState(ctx, tabId));
+  view.webContents.on("did-navigate-in-page", () => {
+    emitTabWebState(ctx, tabId);
+    if (tabId === ctx.activeTabId) {
+      void reconcileActiveHtmlFullscreen(ctx);
+    }
+  });
+  view.webContents.on("did-finish-load", () => {
+    emitTabWebState(ctx, tabId);
+    if (tabId === ctx.activeTabId) {
+      void reconcileActiveHtmlFullscreen(ctx);
+    }
+  });
+  view.webContents.on("enter-html-full-screen", () => {
+    entry.isHtmlFullscreen = true;
+    if (tabId === ctx.activeTabId) {
+      try {
+        syncHtmlFullscreenFromActiveTab(ctx);
+        updateWebLayerBounds(ctx);
+      } catch {
+        // Ignore transient fullscreen transition races.
+      }
+    }
+  });
+  view.webContents.on("leave-html-full-screen", () => {
+    entry.isHtmlFullscreen = false;
+    if (tabId === ctx.activeTabId) {
+      try {
+        syncHtmlFullscreenFromActiveTab(ctx);
+        updateWebLayerBounds(ctx);
+      } catch {
+        // Ignore transient fullscreen transition races.
+      }
+      setTimeout(() => {
+        void reconcileActiveHtmlFullscreen(ctx);
+      }, 0);
+    }
+  });
   view.webContents.on("found-in-page", (_event, result) => {
     if (!result || tabId !== ctx.activeTabId) {
       return;
@@ -560,6 +704,10 @@ function removeTabView(ctx, tabId) {
 
   const entry = ctx.tabViews.get(tabId);
   ctx.tabViews.delete(tabId);
+  if (tabId === ctx.activeTabId && ctx.isHtmlFullscreen) {
+    syncHtmlFullscreenFromActiveTab(ctx);
+    updateWebLayerBounds(ctx);
+  }
 
   try {
     ctx.window.contentView.removeChildView(entry.view);
@@ -753,17 +901,80 @@ function updateWebLayerBounds(ctx) {
 
   const padding = UI_PADDING;
   const [width, height] = ctx.window.getContentSize();
-  const bounds = ctx.lastContentBounds ?? {
+  const normalBounds = ctx.lastContentBounds ?? {
     x: padding.left,
     y: padding.top,
     width: Math.max(320, width - padding.left - padding.right),
     height: Math.max(200, height - padding.top - padding.bottom),
   };
+  const bounds = ctx.isHtmlFullscreen
+    ? { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }
+    : normalBounds;
 
   for (const [tabId, entry] of ctx.tabViews.entries()) {
+    if (!entry?.view || entry.view.webContents.isDestroyed()) {
+      continue;
+    }
+
     const shouldShow = !ctx.isWebLayerHidden && tabId === ctx.activeTabId;
-    entry.view.setBounds(shouldShow ? bounds : { x: 0, y: 0, width: 0, height: 0 });
+    try {
+      entry.view.setBounds(shouldShow ? bounds : { x: 0, y: 0, width: 0, height: 0 });
+    } catch {
+      // Ignore transient view-destroy races (can happen around fullscreen/tab teardown).
+    }
   }
+}
+
+function syncHtmlFullscreenFromActiveTab(ctx) {
+  if (!ctx) {
+    return;
+  }
+
+  const next = Boolean(ctx.tabViews.get(ctx.activeTabId)?.isHtmlFullscreen);
+  if (ctx.isHtmlFullscreen === next) {
+    return;
+  }
+
+  ctx.isHtmlFullscreen = next;
+  sendToRenderer(ctx, "browser:html-fullscreen-changed", {
+    active: next,
+    tabId: ctx.activeTabId,
+  });
+}
+
+async function reconcileActiveHtmlFullscreen(ctx) {
+  if (!ctx) {
+    return;
+  }
+
+  const entry = ctx.tabViews.get(ctx.activeTabId);
+  let next = Boolean(entry?.isHtmlFullscreen);
+
+  if (entry?.view?.webContents && !entry.view.webContents.isDestroyed()) {
+    try {
+      const fromDom = await entry.view.webContents.executeJavaScript(
+        "Boolean(document.fullscreenElement || document.webkitFullscreenElement)",
+        true
+      );
+      if (typeof fromDom === "boolean") {
+        next = fromDom;
+        entry.isHtmlFullscreen = fromDom;
+      }
+    } catch {
+      // Ignore probing errors and keep event-based state.
+    }
+  }
+
+  if (ctx.isHtmlFullscreen === next) {
+    return;
+  }
+
+  ctx.isHtmlFullscreen = next;
+  sendToRenderer(ctx, "browser:html-fullscreen-changed", {
+    active: next,
+    tabId: ctx.activeTabId,
+  });
+  updateWebLayerBounds(ctx);
 }
 
 function syncActiveTabToWebLayer(ctx) {
@@ -903,6 +1114,7 @@ function createMainWindow() {
     activeTabId: null,
     tabsById: new Map(),
     isWebLayerHidden: false,
+    isHtmlFullscreen: false,
     lastContentBounds: null,
   };
   bindWindowSizeShortcuts(ctx, win.webContents);
@@ -998,6 +1210,8 @@ app.whenReady().then(() => {
     }
 
     syncActiveTabToWebLayer(ctx);
+    syncHtmlFullscreenFromActiveTab(ctx);
+    void reconcileActiveHtmlFullscreen(ctx);
     updateWebLayerBounds(ctx);
     refreshDiscardTimers(ctx);
     emitWebState(ctx);
@@ -1147,7 +1361,7 @@ app.whenReady().then(() => {
     const fallbackFromFilename = payloadFilename
       ? path.join(app.getPath("downloads"), payloadFilename)
       : "";
-    const targetPath = meta?.savePath || payloadSavePath || fallbackFromFilename;
+    const targetPath = payloadSavePath || meta?.savePath || fallbackFromFilename;
     if (!targetPath) {
       return false;
     }

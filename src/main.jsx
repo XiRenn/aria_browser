@@ -12,6 +12,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <App />
       <Toaster
         position="top-right"
+        containerStyle={{ top: 150 }}
         toastOptions={{
           style: {
             background: "rgba(15, 23, 42, 0.88)",

@@ -60,6 +60,13 @@
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
+    "linux": {
+      "target": [
+        "deb"
+      ],
+      "maintainer": "Aria Browser Team <support@aria.local>",
+      "category": "Utility"
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true

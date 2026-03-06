@@ -110,3 +110,18 @@ export function VolumeOffIcon({ className }) {
 export function PopoutPlayerIcon({ className }) {
   return <Icon className={className}><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M13 9h5v5" /><path d="m18 9-6 6" /></Icon>;
 }
+export function CopyIcon({ className }) {
+  return <Icon className={className}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Icon>;
+}
+export function KeepOnTopOnIcon({ className }) {
+  return <Icon className={className}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M12 15V9" /><path d="m9.5 11.5 2.5-2.5 2.5 2.5" /><path d="M8 18h8" /></Icon>;
+}
+export function KeepOnTopOffIcon({ className }) {
+  return <Icon className={className}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M8 18h8" /><path d="M7 9l10 8" /></Icon>;
+}
+export function AlwaysTopOnIcon({ className }) {
+  return <Icon className={className}><path d="M12 19V7" /><path d="m8.5 10.5 3.5-3.5 3.5 3.5" /><path d="M7 19h10" /></Icon>;
+}
+export function AlwaysTopOffIcon({ className }) {
+  return <Icon className={className}><path d="M12 19V7" /><path d="m8.5 10.5 3.5-3.5 3.5 3.5" /><path d="M7 19h10" /><path d="M6 6l12 12" /></Icon>;
+}

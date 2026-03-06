@@ -51,4 +51,44 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("find:result", handler);
     return () => ipcRenderer.removeListener("find:result", handler);
   },
+  onHtmlFullscreenChanged: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("browser:html-fullscreen-changed", handler);
+    return () => ipcRenderer.removeListener("browser:html-fullscreen-changed", handler);
+  },
+  onShortcutPalette: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("shortcut:palette", handler);
+    return () => ipcRenderer.removeListener("shortcut:palette", handler);
+  },
+  onShortcutCloseTab: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("shortcut:close-tab", handler);
+    return () => ipcRenderer.removeListener("shortcut:close-tab", handler);
+  },
+  onShortcutHistory: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("shortcut:history", handler);
+    return () => ipcRenderer.removeListener("shortcut:history", handler);
+  },
+  onShortcutDownloads: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("shortcut:downloads", handler);
+    return () => ipcRenderer.removeListener("shortcut:downloads", handler);
+  },
+  onShortcutFind: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("shortcut:find", handler);
+    return () => ipcRenderer.removeListener("shortcut:find", handler);
+  },
+  onShortcutToggleSidebar: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("shortcut:toggle-sidebar", handler);
+    return () => ipcRenderer.removeListener("shortcut:toggle-sidebar", handler);
+  },
+  onShortcutReopenTab: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("shortcut:reopen-tab", handler);
+    return () => ipcRenderer.removeListener("shortcut:reopen-tab", handler);
+  },
 });

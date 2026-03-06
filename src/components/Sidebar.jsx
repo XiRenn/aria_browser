@@ -32,19 +32,20 @@ import {
   upsertDownload,
 } from "../store";
 import {
-  AlwaysOnTopOffIcon,
-  AlwaysOnTopOnIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CloseIcon,
+  CopyIcon,
   DownloadIcon,
   HistoryIcon,
   MaximizeIcon,
   MinusIcon,
   PopoutPlayerIcon,
   PlusIcon,
+  AlwaysTopOnIcon,
+  AlwaysTopOffIcon,
   ReloadIcon,
   SearchIcon,
   SidebarToggleIcon,
@@ -291,6 +292,7 @@ export default function Sidebar() {
     isMaximized: false,
     isAlwaysOnTop: false,
   });
+  const [htmlFullscreen, setHtmlFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(() => tabs.length === 0);
   const [paletteMode, setPaletteMode] = useState(() => (tabs.length === 0 ? "new-tab" : "navigate"));
   const [paletteInput, setPaletteInput] = useState("");
@@ -303,6 +305,16 @@ export default function Sidebar() {
   const [activeFolderId, setActiveFolderId] = useState(bookmarks.rootId);
   const [draggingBookmarkId, setDraggingBookmarkId] = useState(null);
   const [dropHint, setDropHint] = useState({ id: null, mode: null });
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem("aria-sidebar-width");
+    return saved ? parseInt(saved, 10) : 240;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const [isZenMode, setIsZenMode] = useState(() => {
+    const saved = localStorage.getItem("aria-zen-mode");
+    return saved === "true";
+  });
+  const [isHovered, setIsHovered] = useState(false);
 
   const paletteInputRef = useRef(null);
   const findInputRef = useRef(null);
@@ -310,8 +322,22 @@ export default function Sidebar() {
   const importInputRef = useRef(null);
   const boundsRafRef = useRef(0);
   const lastBoundsRef = useRef({ x: -1, y: -1, width: -1, height: -1 });
+  const startupPaletteOpenedRef = useRef(false);
 
   const density = DENSITY_PRESET;
+  const anyOverlayOpen = paletteOpen || historyOpen || downloadsOpen || Boolean(editDialog);
+  const isSidebarVisible = !isZenMode || isHovered || anyOverlayOpen;
+  const currentSidebarWidth = showBookmarksPanel ? sidebarWidth : 64;
+  const effectiveSidebarWidth = isSidebarVisible ? currentSidebarWidth : 0;
+
+  const toggleZenMode = useCallback(() => {
+    setIsZenMode((prev) => {
+      const next = !prev;
+      localStorage.setItem("aria-zen-mode", String(next));
+      return next;
+    });
+  }, []);
+
   const currentFolder =
     bookmarks.nodes[activeFolderId]?.type === "folder"
       ? bookmarks.nodes[activeFolderId]
@@ -328,43 +354,59 @@ export default function Sidebar() {
         .filter((node) => node?.type === "bookmark")
         .map((node) => ({
           id: node.id,
+          type: "bookmark",
           title: node.title || "Untitled",
           url: node.url || "about:blank",
         })),
     [bookmarks.nodes]
   );
-  const paletteBookmarks = useMemo(() => {
+  const allTabItems = useMemo(
+    () =>
+      tabs.map((tab) => ({
+        id: tab.id,
+        type: "tab",
+        title: tab.title || "Untitled",
+        url: tab.url || "about:blank",
+      })),
+    [tabs]
+  );
+  const paletteItems = useMemo(() => {
     const needle = (paletteInput ?? "").trim().toLowerCase();
-    const ranked = allBookmarkItems
+    const pool = [...allTabItems, ...allBookmarkItems];
+
+    const ranked = pool
       .map((item) => {
-        const title = item.title.toLowerCase();
-        const url = item.url.toLowerCase();
+        const title = (item.title ?? "").toLowerCase();
+        const url = (item.url ?? "").toLowerCase();
 
         if (!needle) {
           return { item, score: 0 };
         }
+        
+        let score = -1;
         if (title === needle || url === needle) {
-          return { item, score: 1000 };
+          score = 2000;
+        } else if (title.startsWith(needle) || url.startsWith(needle)) {
+          score = 1000;
+        } else if (title.includes(needle)) {
+          score = 500;
+        } else if (url.includes(needle)) {
+          score = 400;
         }
-        if (title.startsWith(needle) || url.startsWith(needle)) {
-          return { item, score: 700 };
+
+        // Boost tabs over bookmarks
+        if (score > 0 && item.type === "tab") {
+          score += 100;
         }
-        if (title.includes(needle)) {
-          return { item, score: 500 };
-        }
-        if (url.includes(needle)) {
-          return { item, score: 400 };
-        }
-        return { item, score: -1 };
+
+        return { item, score };
       })
       .filter((entry) => entry.score >= 0)
       .sort((a, b) => b.score - a.score || a.item.title.length - b.item.title.length)
       .map((entry) => entry.item);
 
-    return ranked.slice(0, 10);
-  }, [allBookmarkItems, paletteInput]);
-  const parentFolder = currentFolder?.parentId ? bookmarks.nodes[currentFolder.parentId] : null;
-  const anyOverlayOpen = paletteOpen || historyOpen || downloadsOpen || Boolean(editDialog);
+    return ranked.slice(0, 12);
+  }, [allBookmarkItems, allTabItems, paletteInput]);
 
   useEffect(() => {
     setAddressInput(activeTab?.url ?? "");
@@ -379,23 +421,35 @@ export default function Sidebar() {
   }, [tabs.length]);
 
   useEffect(() => {
+    if (startupPaletteOpenedRef.current) {
+      return;
+    }
+    startupPaletteOpenedRef.current = true;
+
+    const isBlankStart = !activeTabId || activeTab?.url === "about:blank";
+    setPaletteMode(isBlankStart ? "new-tab" : "navigate");
+    setPaletteInput(isBlankStart ? "" : normalizePaletteSeed(activeTab?.url));
+    setHistoryOpen(false);
+    setDownloadsOpen(false);
+    setPaletteOpen(true);
+  }, [activeTabId, activeTab?.url]);
+
+  useEffect(() => {
+    if (!activeTabId || activeTab?.url !== "about:blank") {
+      return;
+    }
+    setPaletteMode("new-tab");
+    setPaletteInput("");
+    setPaletteOpen(true);
+    setHistoryOpen(false);
+    setDownloadsOpen(false);
+  }, [activeTabId, activeTab?.url]);
+
+  useEffect(() => {
     if (!bookmarks.nodes[activeFolderId] || bookmarks.nodes[activeFolderId].type !== "folder") {
       setActiveFolderId(bookmarks.rootId);
     }
   }, [activeFolderId, bookmarks.nodes, bookmarks.rootId]);
-
-  useEffect(() => {
-    if (!paletteOpen) {
-      return;
-    }
-
-    const id = setTimeout(() => {
-      paletteInputRef.current?.focus();
-      paletteInputRef.current?.select();
-    }, 0);
-
-    return () => clearTimeout(id);
-  }, [paletteOpen]);
 
   useEffect(() => {
     if (!findOpen) {
@@ -477,6 +531,64 @@ export default function Sidebar() {
         activeMatchOrdinal: Number.isFinite(payload?.activeMatchOrdinal) ? payload.activeMatchOrdinal : 0,
       });
     });
+    const offHtmlFullscreenChanged = api.onHtmlFullscreenChanged?.((payload) => {
+      setHtmlFullscreen(Boolean(payload?.active));
+    });
+
+    // Global Shortcut Listeners from Main Process
+    const offShortcutPalette = api.onShortcutPalette?.((payload) => {
+      setPaletteMode(payload?.mode || "navigate");
+      if (payload?.mode === "new-tab") {
+        setPaletteInput("");
+      } else {
+        setPaletteInput(normalizePaletteSeed(activeTab?.url));
+      }
+      setPaletteOpen(true);
+      setHistoryOpen(false);
+      setDownloadsOpen(false);
+    });
+
+    const offShortcutCloseTab = api.onShortcutCloseTab?.(() => {
+      const isClosingLastTab = tabs.length <= 1;
+      if (isClosingLastTab) {
+        api.closeWindow?.();
+        return;
+      }
+      const tabIdToClose = activeTabId || tabs[0]?.id;
+      if (tabIdToClose) {
+        dispatch(closeTab(tabIdToClose));
+      }
+    });
+
+    const offShortcutHistory = api.onShortcutHistory?.(() => {
+      setHistoryOpen(true);
+      setDownloadsOpen(false);
+      setPaletteOpen(false);
+    });
+
+    const offShortcutDownloads = api.onShortcutDownloads?.(() => {
+      setDownloadsOpen(true);
+      setHistoryOpen(false);
+      setPaletteOpen(false);
+    });
+
+    const offShortcutFind = api.onShortcutFind?.((payload) => {
+      setFindOpen(true);
+      const query = (findQuery ?? "").trim();
+      if (query) {
+        api.findInPage?.(query, { findNext: true, forward: !payload?.reverse });
+      }
+    });
+
+    const offShortcutReopenTab = api.onShortcutReopenTab?.(() => {
+      if (recentlyClosedCount > 0) {
+        dispatch(reopenLastClosedTab());
+      }
+    });
+
+    const offShortcutToggleSidebar = api.onShortcutToggleSidebar?.(() => {
+      toggleZenMode();
+    });
 
     api
       .getWindowState()
@@ -495,18 +607,65 @@ export default function Sidebar() {
       offDownloadUpdate?.();
       offTabDiscarded?.();
       offFindResult?.();
+      offHtmlFullscreenChanged?.();
+      offShortcutPalette?.();
+      offShortcutCloseTab?.();
+      offShortcutHistory?.();
+      offShortcutDownloads?.();
+      offShortcutFind?.();
+      offShortcutReopenTab?.();
+      offShortcutToggleSidebar?.();
     };
-  }, [dispatch]);
+  }, [activeTab?.url, activeTabId, dispatch, findQuery, recentlyClosedCount, tabs, toggleZenMode]);
 
   useEffect(() => {
-    window.electronAPI?.setWebLayerHidden?.(anyOverlayOpen);
+    window.electronAPI?.setWebLayerHidden?.(anyOverlayOpen && !htmlFullscreen);
     return () => window.electronAPI?.setWebLayerHidden?.(false);
-  }, [anyOverlayOpen]);
+  }, [anyOverlayOpen, htmlFullscreen]);
+
+  useEffect(() => {
+    if (!htmlFullscreen) {
+      return;
+    }
+    setPaletteOpen(false);
+    setHistoryOpen(false);
+    setDownloadsOpen(false);
+    setFindOpen(false);
+  }, [htmlFullscreen]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e) => {
+      const newWidth = Math.max(180, Math.min(600, e.clientX));
+      setSidebarWidth(newWidth);
+      localStorage.setItem("aria-sidebar-width", String(newWidth));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.body.style.cursor = "default";
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.body.style.cursor = "col-resize";
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "default";
+    };
+  }, [isResizing]);
 
   useEffect(() => {
     const syncBounds = () => {
+      if (htmlFullscreen) {
+        return;
+      }
+
       const web = density.web;
-      const x = showBookmarksPanel ? web.bookmarkLeft : web.tabLeft;
+      const x = effectiveSidebarWidth + (isSidebarVisible ? 8 : 0);
       const y = web.top;
       const width = Math.max(320, window.innerWidth - x - web.right);
       const height = Math.max(200, window.innerHeight - y - web.bottom);
@@ -539,18 +698,23 @@ export default function Sidebar() {
         boundsRafRef.current = 0;
       }
     };
-  }, [density.web, showBookmarksPanel]);
+  }, [density.web, htmlFullscreen, showBookmarksPanel, effectiveSidebarWidth, isSidebarVisible]);
+
+  const focusActiveWebview = useCallback(() => {
+    setTimeout(() => window.electronAPI?.focusActiveWebview?.(), 0);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
-        if (paletteOpen || historyOpen || downloadsOpen) {
+        if (paletteOpen || historyOpen || downloadsOpen || findOpen || Boolean(editDialog)) {
           event.preventDefault();
           setPaletteOpen(false);
           setHistoryOpen(false);
           setDownloadsOpen(false);
           setFindOpen(false);
-          window.electronAPI?.focusActiveWebview?.();
+          setEditDialog(null);
+          focusActiveWebview();
           return;
         }
       }
@@ -561,6 +725,30 @@ export default function Sidebar() {
       }
 
       const key = event.key.toLowerCase();
+      if (event.ctrlKey && !event.metaKey && key === "tab") {
+        event.preventDefault();
+        if (tabs.length < 2) {
+          return;
+        }
+
+        const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+        const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+        const step = event.shiftKey ? -1 : 1;
+        const nextIndex = (baseIndex + step + tabs.length) % tabs.length;
+        const nextTab = tabs[nextIndex];
+
+        if (nextTab?.id) {
+          dispatch(setActiveTab(nextTab.id));
+          setAddressInput(nextTab.url ?? "");
+          setPaletteOpen(false);
+          setHistoryOpen(false);
+          setDownloadsOpen(false);
+          setFindOpen(false);
+          focusActiveWebview();
+        }
+        return;
+      }
+
       const editing = isEditableTarget(event.target);
       if (editing && key !== "f" && key !== "l") {
         return;
@@ -590,14 +778,15 @@ export default function Sidebar() {
 
       if (key === "w" && !event.shiftKey) {
         event.preventDefault();
-        if (activeTabId) {
-          const isClosingLastTab = tabs.length === 1;
-          dispatch(closeTab(activeTabId));
-          if (isClosingLastTab) {
-            setPaletteMode("new-tab");
-            setPaletteInput("");
-            setPaletteOpen(true);
-          }
+        const isClosingLastTab = tabs.length <= 1;
+        if (isClosingLastTab) {
+          window.electronAPI?.closeWindow?.();
+          return;
+        }
+
+        const tabIdToClose = activeTabId || tabs[0]?.id;
+        if (tabIdToClose) {
+          dispatch(closeTab(tabIdToClose));
         }
         return;
       }
@@ -656,7 +845,7 @@ export default function Sidebar() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTab?.url, activeTabId, dispatch, downloadsOpen, findQuery, historyOpen, paletteOpen, recentlyClosedCount, tabs.length]);
+  }, [activeTab?.url, activeTabId, dispatch, downloadsOpen, editDialog, findOpen, findQuery, focusActiveWebview, historyOpen, paletteOpen, recentlyClosedCount, tabs]);
 
   const tabCountLabel = useMemo(() => `${tabs.length}`, [tabs.length]);
 
@@ -674,7 +863,8 @@ export default function Sidebar() {
   const closeFindPanel = useCallback(() => {
     setFindOpen(false);
     window.electronAPI?.stopFindInPage?.("clear");
-  }, []);
+    focusActiveWebview();
+  }, [focusActiveWebview]);
 
   const togglePopoutPlayer = async () => {
     const result = await window.electronAPI?.togglePictureInPicture?.();
@@ -702,6 +892,7 @@ export default function Sidebar() {
       dispatch(newTab(entry.url));
     }
     setHistoryOpen(false);
+    focusActiveWebview();
   };
 
   const openDownloadFile = async (item) => {
@@ -809,22 +1000,27 @@ export default function Sidebar() {
   };
 
   const handlePalettePickBookmark = useCallback(
-    (bookmark) => {
-      if (!bookmark?.url) {
+    (item) => {
+      if (!item) {
         return;
       }
 
-      if (paletteMode === "new-tab") {
-        dispatch(newTab(bookmark.url));
-      } else if (activeTabId) {
-        dispatch(navigateTo({ tabId: activeTabId, url: bookmark.url }));
-      } else {
-        dispatch(newTab(bookmark.url));
+      if (item.type === "tab") {
+        dispatch(setActiveTab(item.id));
+      } else if (item.url) {
+        if (paletteMode === "new-tab") {
+          dispatch(newTab(item.url));
+        } else if (activeTabId) {
+          dispatch(navigateTo({ tabId: activeTabId, url: item.url }));
+        } else {
+          dispatch(newTab(item.url));
+        }
       }
 
       setPaletteOpen(false);
+      focusActiveWebview();
     },
-    [activeTabId, dispatch, paletteMode]
+    [activeTabId, dispatch, focusActiveWebview, paletteMode]
   );
 
   const openBookmark = useCallback(
@@ -876,6 +1072,33 @@ export default function Sidebar() {
         url: activeTab.url,
       })
     );
+  };
+
+  const copyCurrentTabUrl = async () => {
+    const url = (activeTab?.url ?? "").trim();
+    if (!url || url === "about:blank") {
+      toast("No URL to copy");
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const temp = document.createElement("textarea");
+        temp.value = url;
+        temp.setAttribute("readonly", "");
+        temp.style.position = "fixed";
+        temp.style.opacity = "0";
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand("copy");
+        document.body.removeChild(temp);
+      }
+      toast.success("URL copied");
+    } catch {
+      toast.error("Cannot copy URL");
+    }
   };
 
   const editNode = useCallback(
@@ -1051,14 +1274,14 @@ export default function Sidebar() {
         <button
           type="button"
           onClick={handleNewTab}
-          className={`no-drag group flex ${density.iconBtn} items-center justify-center rounded border border-white/20 bg-white/10 text-white transition hover:bg-white/20`}
+          className={`no-drag group flex ${density.iconBtn} items-center justify-center rounded-none border border-white/20 bg-white/10 text-white transition hover:bg-white/20`}
           title="New Tab"
         >
           <PlusIcon className="h-4 w-4" />
         </button>
       </div>
 
-      <div className={`drag-region scrollbar-thin flex-1 overflow-y-auto ${density.stack}`}>
+      <div className={`no-drag scrollbar-thin flex-1 overflow-y-auto ${density.stack}`}>
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           return (
@@ -1069,7 +1292,7 @@ export default function Sidebar() {
                 dispatch(setActiveTab(tab.id));
                 setAddressInput(tab.url);
               }}
-              className={`no-drag group relative flex ${density.iconBtn} items-center justify-center rounded border transition ${
+              className={`no-drag group relative flex ${density.iconBtn} items-center justify-center rounded-none border transition ${
                 isActive
                   ? "border-cyan-300/80 bg-cyan-300/25 text-cyan-50"
                   : "border-white/15 bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
@@ -1079,7 +1302,7 @@ export default function Sidebar() {
               <img
                 src={tab.favicon || buildFallbackFavicon(tab.url)}
                 alt=""
-                className="h-4 w-4 rounded-sm"
+                className="h-4 w-4 rounded-none"
                 draggable={false}
                 onError={(event) => {
                   const fallback = buildFallbackFavicon(tab.url);
@@ -1089,7 +1312,7 @@ export default function Sidebar() {
                 }}
               />
               {(tab.isMuted || tab.isDiscarded) && (
-                <span className="pointer-events-none absolute bottom-0 left-0 rounded-tr bg-black/55 px-1 text-[9px] text-white/85">
+                <span className="pointer-events-none absolute bottom-0 left-0 rounded-none bg-black/55 px-1 text-[9px] text-white/85">
                   {tab.isMuted ? "M" : ""}
                   {tab.isDiscarded ? "D" : ""}
                 </span>
@@ -1098,7 +1321,7 @@ export default function Sidebar() {
                 <span
                   role="button"
                   tabIndex={0}
-                  className="no-drag absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded bg-black/55 text-[10px] text-white/90 group-hover:flex"
+                  className="no-drag absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-none bg-black/55 text-[10px] text-white/90 group-hover:flex"
                   onClick={(e) => {
                     e.stopPropagation();
                     dispatch(closeTab(tab.id));
@@ -1126,84 +1349,29 @@ export default function Sidebar() {
   );
 
   return (
-    <aside className={`drag-region h-screen ${showBookmarksPanel ? density.sidebarBookmark : density.sidebarTab}`}>
-      <input
-        ref={importInputRef}
-        type="file"
-        accept="application/json,.json,text/html,.html,.htm"
-        className="hidden"
-        onChange={importBookmarksFile}
-      />
-
+    <>
       <div
-        className="flex flex-col rounded border border-white/25 bg-slate-900/30 backdrop-blur-md"
-        style={{ marginTop: "52px", height: "calc(100% - 52px)" }}
-      >
-        {showBookmarksPanel ? (
-          <Suspense fallback={<div className="p-2 text-xs text-white/70">Loading bookmarks...</div>}>
-            <BookmarksPanel
-              density={density}
-              currentFolder={currentFolder}
-              parentFolder={parentFolder}
-              bookmarkChildren={bookmarkChildren}
-              dropHint={dropHint}
-              draggingBookmarkId={draggingBookmarkId}
-              importInputRef={importInputRef}
-              onBackFolder={() => parentFolder && setActiveFolderId(parentFolder.id)}
-              onCreateFolder={createFolder}
-              onCreateBookmark={createBookmark}
-              onExport={exportBookmarks}
-              onDropFolderEnd={(movingId, folderId) => {
-                if (movingId && folderId) {
-                  dispatch(moveBookmarkNodeToFolderEnd({ movingId, folderId }));
-                }
-                clearDragState();
-              }}
-              onDragLeaveFolder={() => {
-                setDropHint((prev) => (prev.mode === "end" ? { id: null, mode: null } : prev));
-              }}
-              onSetDropHint={setDropHint}
-              onStartDragNode={startDragNode}
-              onClearDragState={clearDragState}
-              onDropBeforeNode={dropBeforeNode}
-              onDropInsideFolderNode={dropInsideFolder}
-              onOpenNode={openBookmarkNode}
-              onEditNode={editNode}
-              onDeleteNode={deleteNode}
-              buildFallbackFavicon={buildFallbackFavicon}
-            />
-          </Suspense>
-        ) : (
-          renderTabsPanel()
-        )}
-      </div>
-
-      <div className="drag-region pointer-events-auto absolute left-0 right-0 top-0 z-20 h-6" />
-
-      <button
-        type="button"
-        onClick={() => dispatch(setBookmarksPanelVisible(!showBookmarksPanel))}
-        className="no-drag absolute z-40 flex items-center justify-center gap-2 rounded border border-white/25 bg-slate-900/45 px-4 text-white/85 shadow-lg backdrop-blur-md transition hover:bg-white/15 hover:text-white"
+        className="drag-region pointer-events-none fixed flex items-center z-40 transition-all duration-300 ease-in-out gap-2"
         style={{
-          left: "8px",
+          left: `${effectiveSidebarWidth + (effectiveSidebarWidth > 0 ? 8 : 4)}px`,
+          right: "8px",
           top: "8px",
-          height: showBookmarksPanel ? "44px" : "36px",
+          opacity: htmlFullscreen ? 0 : 1,
         }}
-        title={showBookmarksPanel ? "Hide Bookmarks" : "Show Bookmarks"}
       >
-        {/* <StarIcon className="h-4 w-4" /> */}
-        <SidebarToggleIcon className="h-4 w-4" open={showBookmarksPanel} />
-      </button>
+        <button
+          type="button"
+          onClick={() => dispatch(setBookmarksPanelVisible(!showBookmarksPanel))}
+          className="no-drag pointer-events-auto flex h-9 w-9 items-center justify-center rounded-none border border-white/25 bg-slate-900/45 text-white/85 shadow-lg backdrop-blur-md transition-all duration-300 hover:bg-white/15 hover:text-white"
+          title={showBookmarksPanel ? "Hide Bookmarks" : "Show Bookmarks"}
+        >
+          <SidebarToggleIcon className="h-4 w-4" open={showBookmarksPanel} />
+        </button>
 
-      <div
-        className={`drag-region pointer-events-auto absolute flex items-center ${
-          showBookmarksPanel ? density.topWrapBookmark : density.topWrapTab
-        } z-30`}
-      >
-        <div className={`no-drag flex items-center gap-1 rounded border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.group}`}>
+        <div className={`no-drag pointer-events-auto flex items-center gap-1 rounded-none border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.group}`}>
           <button
             type="button"
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
             title="Back"
             disabled={!activeTab?.canGoBack}
             onClick={() => window.electronAPI?.browserBack?.()}
@@ -1212,7 +1380,7 @@ export default function Sidebar() {
           </button>
           <button
             type="button"
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
             title="Forward"
             disabled={!activeTab?.canGoForward}
             onClick={() => window.electronAPI?.browserForward?.()}
@@ -1221,7 +1389,7 @@ export default function Sidebar() {
           </button>
           <button
             type="button"
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
             title="Reload"
             disabled={!activeTabId}
             onClick={() => window.electronAPI?.browserReload?.()}
@@ -1230,21 +1398,39 @@ export default function Sidebar() {
           </button>
         </div>
 
-        <form onSubmit={handleAddressSubmit} className="no-drag flex-1">
-          <label className={`flex items-center gap-2 rounded border border-white/25 bg-slate-900/35 text-white shadow-lg backdrop-blur-md ${density.address}`}>
-            <SearchIcon className="h-4 w-4 text-white/75" />
+        <form onSubmit={handleAddressSubmit} className="flex-1 pointer-events-auto">
+          <label className={`drag-region flex items-center gap-2 rounded-none border border-white/25 bg-slate-900/35 text-white shadow-lg backdrop-blur-md ${density.address}`}>
+            <SearchIcon className="h-4 w-4 text-white/75 no-drag" />
             <input
               value={addressInput}
               onChange={(e) => setAddressInput(e.target.value)}
-              className="w-full bg-transparent text-sm text-white placeholder:text-white/55 focus:outline-none"
+              className="no-drag w-full bg-transparent text-sm text-white placeholder:text-white/55 focus:outline-none"
               placeholder="Search or enter address"
               spellCheck={false}
             />
+            <button
+              type="button"
+              onClick={copyCurrentTabUrl}
+              className="no-drag rounded-none p-1 text-white/80 transition hover:bg-white/15 disabled:opacity-40"
+              title="Copy URL"
+              disabled={!activeTab?.url || activeTab.url === "about:blank"}
+            >
+              <CopyIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={bookmarkCurrentTab}
+              className="no-drag rounded-none p-1 text-white/80 transition hover:bg-white/15 disabled:opacity-40"
+              title="Bookmark Current Tab"
+              disabled={!activeTab?.url || activeTab.url === "about:blank"}
+            >
+              <StarIcon className="h-4 w-4" />
+            </button>
           </label>
         </form>
 
         {findOpen && (
-          <div className="no-drag flex h-9 min-w-[280px] items-center gap-1 rounded border border-white/25 bg-slate-900/45 px-1.5 backdrop-blur-md">
+          <div className="no-drag pointer-events-auto flex h-9 min-w-[280px] items-center gap-1 rounded-none border border-white/25 bg-slate-900/45 px-1.5 backdrop-blur-md">
             <input
               ref={findInputRef}
               value={findQuery}
@@ -1269,7 +1455,7 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={() => triggerFindNext(false)}
-              className="flex h-6 w-6 items-center justify-center rounded text-white/80 transition hover:bg-white/15"
+              className="flex h-6 w-6 items-center justify-center rounded-none text-white/80 transition hover:bg-white/15"
               title="Previous (Ctrl+Shift+F)"
             >
               <ChevronUpIcon className="h-3.5 w-3.5" />
@@ -1277,7 +1463,7 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={() => triggerFindNext(true)}
-              className="flex h-6 w-6 items-center justify-center rounded text-white/80 transition hover:bg-white/15"
+              className="flex h-6 w-6 items-center justify-center rounded-none text-white/80 transition hover:bg-white/15"
               title="Next (Ctrl+F)"
             >
               <ChevronDownIcon className="h-3.5 w-3.5" />
@@ -1285,7 +1471,7 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={closeFindPanel}
-              className="rounded px-1.5 py-1 text-[11px] text-white/80 transition hover:bg-white/15"
+              className="rounded-none px-1.5 py-1 text-[11px] text-white/80 transition hover:bg-white/15"
               title="Close Find"
             >
               X
@@ -1293,7 +1479,7 @@ export default function Sidebar() {
           </div>
         )}
 
-        <div className={`no-drag flex items-center gap-1 rounded border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.quickActions}`}>
+        <div className={`no-drag pointer-events-auto flex items-center gap-1 rounded-none border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.quickActions}`}>
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -1302,7 +1488,7 @@ export default function Sidebar() {
                 setDownloadsOpen(false);
                 setPaletteOpen(false);
               }}
-              className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15`}
+              className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15`}
               title="History (Ctrl+H)"
             >
               <HistoryIcon className="mx-auto h-4 w-4" />
@@ -1314,24 +1500,15 @@ export default function Sidebar() {
                 setHistoryOpen(false);
                 setPaletteOpen(false);
               }}
-              className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15`}
+              className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15`}
               title="Downloads (Ctrl+J)"
             >
               <DownloadIcon className="mx-auto h-4 w-4" />
             </button>
             <button
               type="button"
-              onClick={bookmarkCurrentTab}
-              className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15`}
-              title="Bookmark Current Tab"
-              disabled={!activeTab?.url || activeTab.url === "about:blank"}
-            >
-              <StarIcon className="mx-auto h-4 w-4" />
-            </button>
-            <button
-              type="button"
               onClick={toggleActiveTabMute}
-              className={`${density.actionBtn} rounded transition ${
+              className={`${density.actionBtn} rounded-none transition ${
                 activeTab?.isMuted ? "bg-amber-300/20 text-amber-50" : "text-white/80 hover:bg-white/15"
               }`}
               title={activeTab?.isMuted ? "Unmute Tab" : "Mute Tab"}
@@ -1342,7 +1519,7 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={togglePopoutPlayer}
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15 disabled:opacity-40`}
             title="Pop up player (Ctrl+Space)"
             disabled={!activeTabId}
           >
@@ -1351,11 +1528,11 @@ export default function Sidebar() {
           </div>
         </div>
 
-        <div className={`no-drag flex items-center gap-1 rounded border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.group}`}>
+        <div className={`no-drag pointer-events-auto flex items-center gap-1 rounded-none border border-white/25 bg-slate-900/35 backdrop-blur-md ${density.group}`}>
           <button
             type="button"
             onClick={() => window.electronAPI?.toggleAlwaysOnTop?.()}
-            className={`${density.actionBtn} rounded transition ${
+            className={`${density.actionBtn} rounded-none transition ${
               windowState.isAlwaysOnTop
                 ? "bg-cyan-400/25 text-cyan-100"
                 : "text-white/80 hover:bg-white/15"
@@ -1363,15 +1540,15 @@ export default function Sidebar() {
             title="Always On Top"
           >
             {windowState.isAlwaysOnTop ? (
-              <AlwaysOnTopOnIcon className="mx-auto h-4 w-4" />
+              <AlwaysTopOnIcon className="mx-auto h-4 w-4" />
             ) : (
-              <AlwaysOnTopOffIcon className="mx-auto h-4 w-4" />
+              <AlwaysTopOffIcon className="mx-auto h-4 w-4" />
             )}
           </button>
           <button
             type="button"
             onClick={() => window.electronAPI?.minimizeWindow?.()}
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15`}
             title="Minimize"
           >
             <MinusIcon className="mx-auto h-4 w-4" />
@@ -1379,7 +1556,7 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={() => window.electronAPI?.toggleMaximizeWindow?.()}
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-white/15`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-white/15`}
             title={windowState.isMaximized ? "Restore" : "Maximize"}
           >
             <MaximizeIcon className="mx-auto h-4 w-4" />
@@ -1387,7 +1564,7 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={() => window.electronAPI?.closeWindow?.()}
-            className={`${density.actionBtn} rounded text-white/80 transition hover:bg-rose-500/70`}
+            className={`${density.actionBtn} rounded-none text-white/80 transition hover:bg-rose-500/70`}
             title="Close"
           >
             <CloseIcon className="mx-auto h-4 w-4" />
@@ -1395,17 +1572,113 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Zen Mode Trigger Zone */}
+      {isZenMode && !isSidebarVisible && (
+        <div
+          className="pointer-events-auto fixed left-0 top-0 z-50 h-screen w-2 bg-transparent"
+          onMouseEnter={() => setIsHovered(true)}
+        />
+      )}
+
+      <aside
+        className={`${htmlFullscreen ? "hidden rounded-none " : "rounded-none "}drag-region pointer-events-auto fixed left-0 top-0 h-screen transition-all duration-300 ease-in-out ${
+          isSidebarVisible ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"
+        }`}
+        style={{
+          width: `${effectiveSidebarWidth}px`,
+          padding: isSidebarVisible ? "6px" : "0",
+          zIndex: 20,
+        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        {/* Zen Mode Toggle Button */}
+        {(isHovered || !isZenMode) && (
+          <button
+            type="button"
+            onClick={toggleZenMode}
+            className={`no-drag absolute top-2.5 left-2.5 z-50 flex h-8 w-10 items-center justify-center rounded-none border border-white/20 bg-slate-900/40 text-white/60 backdrop-blur-md transition-all hover:bg-white/10 hover:text-white ${
+              isZenMode ? "bg-cyan-500/20 text-cyan-100 border-cyan-500/30" : ""
+            }`}
+            title={isZenMode ? "Turn Off Zen Mode" : "Turn On Zen Mode"}
+          >
+            <div className="text-[10px] font-bold">ZEN</div>
+          </button>
+        )}
+        <div className={`flex h-full flex-col overflow-hidden ${showBookmarksPanel ? "" : "w-[52px]"}`}>
+          <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json,text/html,.html,.htm"
+          className="hidden"
+          onChange={importBookmarksFile}
+        />
+
+        <div
+          className="drag-region flex flex-col rounded-none border border-white/20 bg-slate-900/35 backdrop-blur-md"
+          style={{ marginTop: "52px", height: "calc(100% - 52px)" }}
+        >
+          {showBookmarksPanel ? (
+            <Suspense fallback={<div className="p-2 text-xs text-white/70">Loading bookmarks...</div>}>
+              <BookmarksPanel
+                density={density}
+                bookmarks={bookmarks}
+                selectedFolderId={currentFolder?.id || bookmarks.rootId}
+                dropHint={dropHint}
+                draggingBookmarkId={draggingBookmarkId}
+                importInputRef={importInputRef}
+                onCreateFolder={createFolder}
+                onCreateBookmark={createBookmark}
+                onExport={exportBookmarks}
+                onDropFolderEnd={(movingId, folderId) => {
+                  if (movingId && folderId) {
+                    dispatch(moveBookmarkNodeToFolderEnd({ movingId, folderId }));
+                  }
+                  clearDragState();
+                }}
+                onSetDropHint={setDropHint}
+                onStartDragNode={startDragNode}
+                onClearDragState={clearDragState}
+                onDropBeforeNode={dropBeforeNode}
+                onDropInsideFolderNode={dropInsideFolder}
+                onOpenNode={openBookmarkNode}
+                onEditNode={editNode}
+                onDeleteNode={deleteNode}
+                buildFallbackFavicon={buildFallbackFavicon}
+              />
+            </Suspense>
+          ) : (
+            renderTabsPanel()
+          )}
+        </div>
+      </div>
+
+        {showBookmarksPanel && (
+          <div
+            className="no-drag absolute -right-1 top-0 h-screen w-2 cursor-col-resize hover:bg-cyan-400/30"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsResizing(true);
+            }}
+          />
+        )}
+
+      </aside>
+
       <Suspense fallback={null}>
         <CommandPalette
           open={paletteOpen}
           density={density}
           mode={paletteMode}
           inputValue={paletteInput}
-          suggestions={paletteBookmarks}
+          suggestions={paletteItems}
           inputRef={paletteInputRef}
           onChange={setPaletteInput}
           onPickSuggestion={handlePalettePickBookmark}
-          onClose={() => setPaletteOpen(false)}
+          onClose={() => {
+            setPaletteOpen(false);
+            focusActiveWebview();
+          }}
           onSubmit={handlePaletteSubmit}
         />
       </Suspense>
@@ -1416,7 +1689,10 @@ export default function Sidebar() {
           entries={historyEntries}
           onOpenEntry={openHistoryEntry}
           onClear={() => dispatch(clearHistory())}
-          onClose={() => setHistoryOpen(false)}
+          onClose={() => {
+            setHistoryOpen(false);
+            focusActiveWebview();
+          }}
         />
       </Suspense>
 
@@ -1430,17 +1706,23 @@ export default function Sidebar() {
           onResume={resumeDownload}
           onCancel={cancelDownload}
           onClear={() => dispatch(clearDownloads())}
-          onClose={() => setDownloadsOpen(false)}
+          onClose={() => {
+            setDownloadsOpen(false);
+            focusActiveWebview();
+          }}
         />
       </Suspense>
 
       {editDialog && (
         <div
-          className="no-drag fixed inset-0 z-50 flex items-start justify-center bg-slate-950/35 backdrop-blur-sm pt-16"
-          onMouseDown={() => setEditDialog(null)}
+          className="no-drag pointer-events-auto fixed inset-0 z-50 flex items-start justify-center bg-slate-950/35 backdrop-blur-sm pt-16"
+          onMouseDown={() => {
+            setEditDialog(null);
+            focusActiveWebview();
+          }}
         >
           <form
-            className="w-[min(520px,calc(100vw-48px))] rounded border border-white/20 bg-slate-900/65 p-2.5 shadow-2xl backdrop-blur-2xl"
+            className="w-[min(520px,calc(100vw-48px))] rounded-none border border-white/20 bg-slate-900/65 p-2.5 shadow-2xl backdrop-blur-2xl"
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={submitEditDialog}
           >
@@ -1452,7 +1734,7 @@ export default function Sidebar() {
                 ref={editInputRef}
                 value={editDialog.name ?? ""}
                 onChange={(e) => setEditDialog((prev) => ({ ...prev, name: e.target.value }))}
-                className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                className="h-9 w-full rounded-none border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
                 placeholder="Folder name"
               />
             ) : (
@@ -1461,13 +1743,13 @@ export default function Sidebar() {
                   ref={editInputRef}
                   value={editDialog.title ?? ""}
                   onChange={(e) => setEditDialog((prev) => ({ ...prev, title: e.target.value }))}
-                  className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                  className="h-9 w-full rounded-none border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
                   placeholder="Bookmark title"
                 />
                 <input
                   value={editDialog.url ?? ""}
                   onChange={(e) => setEditDialog((prev) => ({ ...prev, url: e.target.value }))}
-                  className="h-9 w-full rounded border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
+                  className="h-9 w-full rounded-none border border-white/25 bg-white/10 px-2 text-sm text-white placeholder:text-white/50 focus:outline-none"
                   placeholder="Bookmark URL"
                   spellCheck={false}
                 />
@@ -1476,14 +1758,14 @@ export default function Sidebar() {
             <div className="mt-3 flex items-center justify-end gap-2">
               <button
                 type="button"
-                className="rounded border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10"
+                className="rounded-none border border-white/20 px-2 py-1 text-xs text-white/80 transition hover:bg-white/10"
                 onClick={() => setEditDialog(null)}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded border border-cyan-300/40 bg-cyan-300/15 px-2 py-1 text-xs text-cyan-50 transition hover:bg-cyan-300/25"
+                className="rounded-none border border-cyan-300/40 bg-cyan-300/15 px-2 py-1 text-xs text-cyan-50 transition hover:bg-cyan-300/25"
               >
                 Save
               </button>
@@ -1491,6 +1773,6 @@ export default function Sidebar() {
           </form>
         </div>
       )}
-    </aside>
+    </>
   );
 }
